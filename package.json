@@ -1,5 +1,5 @@
 {
-  "name": "@refactor-op/cn.refactor.pool",
+  "name": "cn.refactor.pool",
   "displayName": "Refactor Pool",
   "version": "0.9.2",
   "description": "高性能 0 Gc 对象池, 策略模式, RAII, 并发安全.",
