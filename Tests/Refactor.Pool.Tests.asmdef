@@ -1,0 +1,17 @@
+{
+    "name": "Refactor.Pool.Tests",
+    "rootNamespace": "",
+    "references": [
+        "GUID:e1095b58868da7049b56c141f539621e"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": ["UNITY_INCLUDE_TESTS"],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": ["TestAssemblies"]
+}
