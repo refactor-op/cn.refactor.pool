@@ -155,7 +155,7 @@ new Pool<List<int>>(
 
 ## 扩展
 
-需要开箱即用的全局池？看看这个 👉 [cn.refactor.pool.extra](https://github.com/refactor.op/cn.refactor.pool.extra)
+需要开箱即用的全局池？看看这个 👉 [cn.refactor.pool.extra](https://github.com/refactor-op/cn.refactor.pool.extra)
 
 ## 贡献
 
