@@ -2,7 +2,7 @@
 
 using System;
 
-namespace Refactor.Pool
+namespace Refactor.Core.Pool
 {
     /// <summary>
     /// 对象池策略接口.

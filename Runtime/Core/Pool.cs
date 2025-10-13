@@ -3,7 +3,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Refactor.Pool
+namespace Refactor.Core.Pool
 {
     /// <summary>
     /// 单线程对象池.
