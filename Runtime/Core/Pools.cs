@@ -1,6 +1,6 @@
 ﻿#nullable enable
 
-namespace Refactor.Pool
+namespace Refactor.Core.Pool
 {
     /// <summary>
     /// 对象池静态工厂.
