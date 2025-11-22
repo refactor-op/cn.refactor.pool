@@ -1,6 +1,6 @@
 {
-    "name": "Refactor.Pool.Tests",
-    "rootNamespace": "",
+    "name": "Refactor.Pooling.Tests",
+    "rootNamespace": "Refactor.Pooling.Tests",
     "references": [
         "GUID:e1095b58868da7049b56c141f539621e",
         "GUID:27619889b8ba8c24980f49ee34dbb44a",

@@ -1,80 +1,30 @@
-<div align="center">
-  <h1>Refactor Pool</h1>
-  <p>
-    <img src="https://img.shields.io/badge/Unity-2021.3+-black?logo=unity" />
-  </p>
-</div>
+# Refactor.Pooling
 
-## 为什么 Refactor.Pool
+通过 struct 策略消除虚调用，用固定容量保证确定性，实现高性能、零分配池化。
 
-- 0GC - 存取零分配
-- 高性能 - 相比 MS Extensions ObjectPool，性能 5x
-- 无锁并发安全 - 基于线程本地存储，多线程环境下对象存取无需加锁
+## 基准测试
 
-## 快速开始
+> 环境：Windows 11，.NET 8，BenchmarkDotNet v0.13.12
 
-```csharp
-// 定义 Policy.
-public readonly struct EnemyPolicy : IPoolPolicy<Enemy>
-{
-    public Enemy Create() => new Enemy();
-    public void OnRent(Enemy obj) => obj.Activate();
-    public bool OnReturn(Enemy? obj) => obj?.Deactivate() ?? false;
-}
+### Struct Policy vs 其他实现
 
-// 使用.
-using var enemy = Pools.Create(new EnemyPolicy()).RentScoped();
-// ...
-// 离开作用域, 自动归还.
-// 或者.
-var enemy = Pools.Create(new EnemyPolicy()).Rent();
-// ...
-// 手动归还.
-Pools.Create(new EnemyPolicy()).Return(enemy);
-```
+| 策略类型 | 单次操作 | 100 次操作 | 1000 次操作 | 开销倍数 |
+|----------|----------|------------|-------------|----------|
+| **Struct Policy** | **3.3 ns** | **285 ns** | **4.8 μs** | **1.0×** |
+| Class Policy | 6.2 ns | 661 ns | 8.8 μs | 1.8–2.3× |
+| Interface Policy | 9.4 ns | 1,063 ns | 11.4 μs | 2.8–3.7× |
 
-## Benchmark
+### vs Microsoft.Extensions.ObjectPool
 
-> **测试环境**: Windows 11, i5-13500H 2.60GHz, .NET 9.0.6  
+| 场景 | 本库 (1/100 次) | 微软 (1/100 次) | 性能倍数 | 分配 (100 次) |
+|------|-----------------|-----------------|----------|---------------|
+| 简单对象 | 3.44 ns / 217.7 ns | 14.73 ns / 1601.6 ns | **4.3× / 7.4×** | 0 B / ~1592 B |
+| List\<int\> | 3.41 ns / 289.5 ns | 14.55 ns / 1755.6 ns | **4.3× / 6.1×** | 0 B / ~1592 B |
+| StringBuilder | 4.41 ns / 411.0 ns | 15.08 ns / 1662.6 ns | **3.4× / 4.0×** | 0 B / ~412 B |
 
-### 单线程（10000 次操作）
-| 场景 | 耗时 | 性能 | 内存 |
-|------|------|----------|----------|
-| `new List()` + `Clear()` | 93.32 μs | 基准 | 720 KB |
-| **Pool Rent/Return** | **49.78 μs** | **1.87x ↑** | **0 B** |
-| **Pool Scoped** | **54.02 μs** | **1.73x ↑** | **0 B** |
+## 哲学
 
-### 并发（Parallel.For 10000 次）
-| 场景 | 耗时 | 性能 | 内存 |
-|------|------|----------|----------|
-| `new List()` + `Clear()` | 70.11 μs | 基准 | 725 KB |
-| **Pool Rent/Return** | **42.79 μs** | **1.64x ↑** | **4.6 KB** |
-| **Pool Scoped** | **43.65 μs** | **1.61x ↑** | **4.6 KB** |
-| `Parallel.For` 空循环 | 20.30 μs | - | **4.6 KB** |
-
-> **池本身完全 0 GC**，4.6 KB 来自 TPL 任务调度。
-
-### 与标准库
-
-#### vs Microsoft.Extensions.ObjectPool
-| 场景 | 耗时 | 性能 |
-|------|------|----------|
-| 直接 new | 73.38 μs | 基准 |
-| **Refactor Pool** | **33.22 μs** | **2.21x 快** |
-| MS Extensions | 166.74 μs | **0.44x 慢** |
-
-#### vs System.Buffers.ArrayPool
-| 场景 | 耗时 | 性能 |
-|------|------|----------|
-| 直接 new | 500.53 μs | 基准 |
-| **Refactor Pool** | **108.08 μs** | **4.63x 快** |
-| ArrayPool | **32.68 μs** | **15.32x 快** |
-
-> ArrayPool 在数组场景依旧更快。
-
-## 心路历程
-
-[QFramework](https://github.com/liangxiegame/QFramework) 中的 `ListPool<T>` 让我眼前一亮：
+笔者在使用 QFramework 开发游戏时，意外地撞见了其 `ListPool<T>`，不禁让我眼前一亮：
 
 ```csharp
 public static class ListPool<T>
@@ -90,9 +40,12 @@ public static class ListPool<T>
 }
 ```
 
-这段代码十分简洁，一个栈 + 两个方法就把 `List<T>` 的租界与归还做得如此轻盈。相比 QFramework 为其他各种场景设计的复杂池实现，这种不给开发者心智增加负担的设计让我感觉很舒服，于是我想，能不能把他的所有池实现统一起来？
+一个栈加两个方法，就把 `List<T>` 的租借与归还做到了如此美丽且简洁，它不增加开发者心智负担，却解决了 List 的复用问题。
 
-第一步，很自然地想到抽象接口。
+彼时我追求一致性以至疯魔，QFramework 提供了服务不同场景的池，使我抓狂：要是只需要一个简单的入口，就将服务于各种场景的池统一起来就好了！
+
+第一个念头自然是接口——让被池化的对象实现生命周期：
+
 ```csharp
 public interface IPoolable
 {
@@ -101,75 +54,181 @@ public interface IPoolable
 }
 ```
 
-看起来挺标准的。但当我真要池化 `List<T>` 时，尴尬了——我总不能去改 BCL 的代码吧？写个包装类又太丑。所以，接口这条路走不通。
+但很快就卡住了：我们同时还需要池化如 `List<T>`，我既不能修改它们，也不想用丑陋的包装类。**接口这条路行不通。**
 
-我一度想用源码生成器这个"黑科技"，通过特性在编译时自动生成调用代码。但转念一想，这个"调用者类"到底是什么鬼？本质上不就是把重置逻辑抽出来吗？我完全可以把这东西抽象成策略，而不是硬编码生成。而最适合这个思路的，不就是策略模式嘛。
+我开始考虑源码生成器，通过 Attribute 驱动，在编译时生成重置调用。但这看似可行，本质仍是在产出一个调用者类/方法——那么这不就是策略模式吗：
 
-于是，我定义了 `IPoolPolicy<T>`，让策略来决定对象的创建、清理和回收：
 ```csharp
-public interface IPoolPolicy<T> where T : class
+public interface IPoolPolicy<T>
 {
-    T Create();
-    void OnRent(T obj);
-    bool OnReturn(T? obj);
+    T Create();           // 创建对象.
+    void OnRent(T obj);   // 激活对象.
+    bool OnReturn(T obj); // 清理并检查, false = 拒绝归还.
 }
 ```
 
-在追求性能的路上，我参考了 Cysharp 的做法。研究 UniTask 源码时，发现它用 struct 实现了 0GC 和高性能。我就想，为什么我们不也用 struct 呢？
+**策略模式将生命周期逻辑"外包"出去，完美解决了池化万物的问题。**
 
-现在能用到 struct 的地方就是 PoolPolicy，但它实现了接口，会不会装箱？跟用 class 比起来真有优势吗？我心里没底。为了搞清楚，我查了很多资料，跟社区里的性能优化专家交流，想弄明白到底什么时候该用 struct。
+恰逢学习 UniTask 的源码，其 `struct` 的设计启发了我：实现了接口的 `struct` 策略在热路径下可以消除虚调用、利于 JIT 内联，并以零分配和更少分支让性能更稳定。
 
-大家告诉我，struct 能内联方法，性能更好。行，那就用 struct，但我得用 benchmark 验证一下——结果证明这个选择是对的。
+**于是有了 struct 策略，比委托快 4.5 倍。**
 
-同时，我还想着要做面向分布式架构的池。大项目肯定要面对并发问题。学过 ET 框架后，我想过用 Actor 或者 Fiber 模型，但这些模型自己也需要池化啊。所以我觉得不能只考虑单线程，得做个并发安全的池，这就是 ConcurrentPool 的由来。
+我试过用委托代替策略，写起来确实漂亮，但委托会直接侵占策略模式的生态位，将策略的性能优势完全抹除，所以我放弃了委托方案。
 
-但并发安全怎么做？最常见的办法就是加锁或者用无锁编程。我担心这会影响性能，跑了个 benchmark 一看——果然慢了不少。作为 Cysharp 的粉丝，我寻思肯定有更好的办法。
+接下来面临一个经典问题：要不要自动扩容？
 
-于是我想到了 Fiber 的设计思路：给每个线程都配个自己的池子？线程安全不一定非要竞争，隔离也行啊！这一刻我明白了：**不要锁！**
+**内存管理成本无法消除，只能转移。** 经过分析：
+- **丢弃**的 GC 成本发生在 Return，可预测（`_ptr < _storage.Length`），耗时固定
+- **扩容**的 `new T[] + Array.Copy` 耗时与容量成正比，且不可预测
 
-每个线程维护自己的本地栈，大部分借还操作都在线程内部完成。但万一线程不够用呢？所以我额外加了个共享池，只有少数对象会进到这里。
-
-接下来该考虑用户体验了。QFramework 的 `ListPool<T>` 用起来真顺手，就像微软的 ArrayPool 一样，用户拿来就用，不用操心创建销毁。这种 API 我必须要有：
+**我们选择固定容量，换取确定性性能。**
 
 ```csharp
-public static class ListPool<T>
+public class Pool<T>
 {
-    public static readonly Pool<List<T>, ListPolicy.Default<T>> Default
-        = Pools.Create(new ListPolicy.Default<T>());
+    private readonly T[] _storage;  // 固定大小.
+    public void Return(T obj)
+    {
+        if (_ptr < _storage.Length) 
+            _storage[_ptr++] = obj;
+        // else 丢弃，让 GC 处理.
+    }
 }
 ```
 
-但策略模式对用户来说有点重，还得额外定义个类。为什么不直接用委托呢？这是我当时很纠结的问题，最后我还是放弃了委托方案。
+结果：游戏跑起来内存很稳定，但当池满时会丢弃对象，导致 GC 频繁——这暗示我们 capacity 设置得不对。
 
-我试过用委托代替策略，写起来确实漂亮：
+于是我们加入了统计功能：
+
 ```csharp
-new Pool<List<int>>(
-    factory: () => new List<int>(),
-    onRent: list => list.Clear()
-);
+#if DEVELOPMENT_BUILD
+private int _rejectedCount;
+#endif
+
+public void Return(T obj)
+{
+    if (_ptr < _storage.Length) 
+        _storage[_ptr++] = obj;
+#if DEVELOPMENT_BUILD
+    else 
+        _rejectedCount++;  // 记录拒绝次数.
+#endif
+}
 ```
 
-但这个做法把所有为标准库定制的 Policy 都废了，因为它把 Policy 的生态位全占了。最后就会退化成只能用委托建池，但委托调用比 struct 内联方法慢，而且还有别的坑（具体细节我后来忘了，反正 benchmark 显示性能不行）。
+**统计功能用 `DEVELOPMENT_BUILD` 保护，零生产成本，但能帮助我们调优容量。**
 
-我还纠结过要不要支持任意数量的参数，为此写了一堆泛型重载。写到一半实在受不了，突然灵光一现：我干嘛不直接把参数存在 Policy 里呢？struct 又不会分配堆内存。
+另外，池化对象的归还常常被遗忘，这源自事件注销的痛点。我们引入了 `RentScoped()`：
 
-## 扩展
+```csharp
+public ref struct PooledScope<T>
+{
+    public void Dispose()
+    {
+        if (_value != null) _pool.Return(_value);
+    }
+}
 
-需要开箱即用的全局池？看看这个 👉 [cn.refactor.pool.extra](https://github.com/refactor-op/cn.refactor.pool.extra)
+// 使用.
+using var scope = pool.RentScoped();
+scope.Value.DoSomething();
+// 离开作用域自动归还.
+```
+
+**RAII 让归还变得自动且安全。**
+
+是时候池化 BCL 了。但问题来了：当某次任务使用的 `List<T>` 多次扩容后，其容量会增加。不调用 `TrimExcess()` 是不会缩容的，如果这种现象持续，`List<T>` 只会越来越大。
+
+**我一度陷入了"池应该管理对象容量"的陷阱。**
+
+我尝试过：
+- 判断对象大小，拒绝超过 85KB 的对象（LOH）
+- Expression Trees（反射访问内部容量字段）
+- 魔法代码（各种黑科技）
+
+但最终醒悟：**这些都是错的。**
+
+```csharp
+// 用户每次需要的容量不同.
+void Task1() 
+{
+    var list = pool.Rent();  // Capacity = 4
+    for (int i = 0; i < 1000; i++) list.Add(item);  // 扩容到 1024.
+    pool.Return(list);  // 拒绝（太大）-> GC.
+}
+
+void Task2()
+{
+    var list = pool.Rent();  // 又是 Capacity = 4.
+    for (int i = 0; i < 1000; i++) list.Add(item);  // 又扩容.
+    pool.Return(list);  // 又拒绝 -> 又 GC.
+}
+
+// 结果: 池化完全失效.
+```
+
+**池化的目的是复用对象，容量检查导致不断拒绝，反而破坏了复用。**
+
+经过大量讨论和反思，我理解了池化的本质：
+
+> **池化 = 管理对象生命周期，不是管理对象内部状态。**
+
+**容量是对象的内部状态，应该由使用者决定，而非池。**
+
+对于容量问题，正确的解决方案是：
+- **小数据**：接受第一次扩容，后续容量稳定，零分配
+- **大数据**：不要用 `List`，用 `ArrayPool` 或 `NativeArray`（容量固定）
+- **不可预测**：不应该池化
+
+**最终，我们删除了所有容量检查。Policy 变得极简：**
+
+```csharp
+public readonly struct ListPoolPolicy<T> : IPoolPolicy<List<T>>
+{
+    public List<T> Create() => new List<T>();
+    public void OnRent(List<T> obj) { }
+    public bool OnReturn(List<T> obj)
+    {
+        if (obj == null) return false;
+        obj.Clear();
+        return true;  // 总是接受.
+    }
+}
+```
+
+## 使用
+
+```csharp
+// 静态池.
+ListPool<T>.Rent()
+ListPool<T>.Return(list)
+ListPool<T>.RentScoped()
+
+// Dictionary, HashSet, Queue, Stack ...
+
+// 创建.
+var pool = Pools.Create(policy, capacity);
+
+// 租借.
+var obj = pool.Rent();
+using var scope = pool.RentScoped();
+
+// 归还.
+pool.Return(obj);
+
+// 工具.
+pool.Prewarm(count);  // 预热.
+pool.Clear();         // 清空.
+
+#if DEVELOPMENT_BUILD
+pool.RejectedCount    // 拒绝次数.
+#endif
+```
+
+## 许可证
+
+MIT License
 
 ## 贡献
 
-欢迎 PR & Issue！
-
-## 致谢
-
-Refactor.Pool 的设计受到以下开发者/项目的启发：
-
-- **[Cysharp](https://github.com/Cysharp)**
-- **[Ben Adams](https://github.com/benaadams)**
-- **[QFramework](https://github.com/liangxiegame/QFramework)**
-- **[ET](https://github.com/egametang/ET)**
-
-<div align="center">
-  <p><i>Your time is limited, so don't waste it living someone else's life.</i></p>
-</div>
+欢迎 Issue 与 PR。

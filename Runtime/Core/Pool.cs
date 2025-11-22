@@ -1,56 +1,111 @@
-#nullable enable
-
 using System;
-using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
-namespace Refactor.Core.Pool
+namespace Refactor.Pooling
 {
-    /// <summary>
-    /// 单线程对象池.
-    /// </summary>
-    public sealed class Pool<T, TPolicy> : IPool<T>, IDisposable
+    public sealed class Pool<T, TPolicy>
         where T : class
         where TPolicy : struct, IPoolPolicy<T>
     {
-        private readonly Stack<T> _stack;
-        private readonly TPolicy  _policy;
-        private readonly int      _max;
-
-        public Pool(TPolicy policy, int initialCapacity = 16, int maxCapacity = 64)
+        private readonly T[] _storage;
+        private readonly TPolicy _policy;
+        private int _ptr;
+        
+#if DEVELOPMENT_BUILD
+        private int _rejectedCount;
+        
+        /// <summary>
+        /// 被拒绝归还的对象数量.
+        /// </summary>
+        public int RejectedCount => _rejectedCount;
+#endif
+        
+        /// <summary>
+        /// 创建池
+        /// </summary>
+        /// <param name="policy">池策略</param>
+        /// <param name="capacity">池容量（固定）</param>
+        public Pool(TPolicy policy, int capacity)
         {
-            if (initialCapacity <= 0 || maxCapacity <= 0)
-                throw new ArgumentOutOfRangeException();
-
-            _stack  = new Stack<T>(initialCapacity);
+            if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
+            
+            _storage = new T[capacity];
             _policy = policy;
-            _max    = maxCapacity;
+            _ptr = 0;
         }
-
+        
+        /// <summary>
+        /// 租借对象
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public T Rent()
         {
-            var obj = _stack.Count > 0 ? _stack.Pop() : _policy.Create();
-            _policy.OnRent(obj);
-            return obj;
+            if (_ptr > 0)
+            {
+                var obj = _storage[--_ptr];
+                _storage[_ptr] = null;
+                _policy.OnRent(obj);
+                return obj;
+            }
+            
+            var newObj = _policy.Create();
+            _policy.OnRent(newObj);
+            return newObj;
         }
-
-        public void Return(T? obj)
+        
+        /// <summary>
+        /// 归还对象
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Return(T obj)
         {
             if (obj == null) return;
-            if (_stack.Count >= _max) return;
-            if (_policy.OnReturn(obj)) _stack.Push(obj);
+            
+            if (_ptr < _storage.Length && _policy.OnReturn(obj))
+            {
+                _storage[_ptr++] = obj;
+            }
+#if DEVELOPMENT_BUILD
+            else
+            {
+                _rejectedCount++;
+            }
+#endif
         }
-
-        public PooledObject<T> RentScoped() => new(this, Rent());
-
+        
+        /// <summary>
+        /// 租借对象（RAII 模式）
+        /// </summary>
+        public PooledScope<T, TPolicy> RentScoped()
+        {
+            return new PooledScope<T, TPolicy>(this, Rent());
+        }
+        
+        /// <summary>
+        /// 预热池（预先创建对象）
+        /// </summary>
         public void Prewarm(int count)
         {
-            if (count <= 0) return;
-            for (var i = 0; i < count && _stack.Count < _max; i++)
-                _stack.Push(_policy.Create());
+            for (var i = 0; i < count && _ptr < _storage.Length; i++)
+            {
+                var obj = _policy.Create();
+                if (_policy.OnReturn(obj))
+                {
+                    _storage[_ptr++] = obj;
+                }
+            }
         }
-
-        public void Clear() => _stack.Clear();
-
-        public void Dispose() => Clear();
+        
+        /// <summary>
+        /// 清空池
+        /// </summary>
+        public void Clear()
+        {
+            for (var i = 0; i < _ptr; i++)
+            {
+                _storage[i] = null;
+            }
+            _ptr = 0;
+        }
     }
 }

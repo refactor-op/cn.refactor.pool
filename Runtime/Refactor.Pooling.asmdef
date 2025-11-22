@@ -1,6 +1,6 @@
 {
-    "name": "Refactor.Core.Pooling",
-    "rootNamespace": "",
+    "name": "Refactor.Pooling",
+    "rootNamespace": "Refactor.Pooling",
     "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
